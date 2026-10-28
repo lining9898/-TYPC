@@ -215,6 +215,10 @@ public sealed class BatchBlockCommands
             BlockTableRecord currentSpace = (BlockTableRecord)transaction.GetObject(
                 database.CurrentSpaceId, OpenMode.ForWrite, false);
 
+            // 本次执行统一时间戳（精确到分），保证同一批操作产生的图块名可追溯、且互不相同
+            string timeStamp = DateTime.Now.ToString(
+                "yyyyMMdd_HHmm", CultureInfo.InvariantCulture);
+
             int created = 0;
             int skipped = 0;
             foreach (List<EntityBox> group in groups)
@@ -227,7 +231,7 @@ public sealed class BatchBlockCommands
                 }
 
                 Point3d basePoint = GetBasePoint(group, _basePointMode);
-                string blockName = GetUniqueBlockName(blockTable, _blockPrefix);
+                string blockName = GetUniqueBlockName(blockTable, _blockPrefix, timeStamp);
                 ObjectId blockId = CreateBlockDefinition(
                     blockTable,
                     group,
@@ -257,7 +261,7 @@ public sealed class BatchBlockCommands
             editor.Regen();
             editor.WriteMessage(
                 $"\n批量做图块完成：识别 {groups.Count} 堆，创建 {created} 个图块，" +
-                $"块名前缀“{_blockPrefix}”。");
+                $"块名格式“{_blockPrefix}_{timeStamp}_NNN”。");
             if (skipped > 0)
                 editor.WriteMessage($" 跳过 {skipped} 堆含锁定图层对象的图形。");
         }
@@ -478,7 +482,7 @@ public sealed class BatchBlockCommands
             _clusterDistance = distanceResult.Value;
 
         var prefixOptions = new PromptStringOptions(
-            $"\n输入图块名前缀 <{_blockPrefix}>: ")
+            $"\n输入图块名前缀 <{_blockPrefix}>（块名将自动追加 时分 时间戳与序号，如 {_blockPrefix}_20261028_1626_001）: ")
         {
             AllowSpaces = false,
             DefaultValue = _blockPrefix,
@@ -730,13 +734,15 @@ public sealed class BatchBlockCommands
         }
     }
 
-    private static string GetUniqueBlockName(BlockTable blockTable, string prefix)
+    private static string GetUniqueBlockName(
+        BlockTable blockTable, string prefix, string timeStamp)
     {
         int number = 1;
         string name;
+        // 块名格式：前缀_年月日时分_序号（序号在分钟内递增，并避让已存在的同名块）
         do
         {
-            name = prefix + "-" + number.ToString("D3", CultureInfo.InvariantCulture);
+            name = $"{prefix}_{timeStamp}_{number.ToString("D3", CultureInfo.InvariantCulture)}";
             number++;
         }
         while (blockTable.Has(name));
