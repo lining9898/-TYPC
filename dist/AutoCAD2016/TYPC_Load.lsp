@@ -1,14 +1,11 @@
 ;;; TYPC Toolbox - AutoCAD 2016 loader
 ;;; DLL : TYPC.dll (v1.0.0.0, acdbmgd/acmgd 20.1 = AutoCAD 2016)
-;;;       System.ValueTuple.dll must sit next to TYPC.dll (used by BBLK clustering).
+;;; Note : self-contained - no extra DLL needs to sit next to TYPC.dll.
 ;;; Usage: APPLOAD this file, or drag it into the drawing area.
 ;;; Auto-load: APPLOAD -> Startup Suite (Contents...) -> add this file.
 
-(defun TYPC-LOAD (/ dll dep)
+(defun TYPC-LOAD (/ dll)
   (setq dll "D:\\ai\\TYPC\\dist\\AutoCAD2016\\TYPC.dll")
-  (setq dep "D:\\ai\\TYPC\\dist\\AutoCAD2016\\System.ValueTuple.dll")
-  (if (not (findfile dep))
-    (princ "\n[TYPC] WARNING - System.ValueTuple.dll missing, BBLK may fail."))
   (if (findfile dll)
     (progn
       (command "_.NETLOAD" dll)
