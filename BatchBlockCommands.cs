@@ -50,6 +50,7 @@ public sealed class BatchBlockCommands
 
         // ── 2. 点选图层过滤（可选，空回车=不筛选） ──
         var layerNames = new List<string>();
+        var highlighted = new List<ObjectId>();
         while (true)
         {
             string hint = layerNames.Count == 0
@@ -73,20 +74,14 @@ public sealed class BatchBlockCommands
             {
                 if (entRes.StringResult == "L")
                 {
-                    using Transaction lt =
-                        database.TransactionManager.StartTransaction();
-                    var layerTable = (LayerTable)lt.GetObject(
-                        database.LayerTableId, OpenMode.ForRead);
-                    int count = 0;
-                    foreach (ObjectId lid in layerTable)
+                    ListLayers(editor, database, layerNames);
+                    if (layerNames.Count > 0)
                     {
-                        var layer = (LayerTableRecord)lt.GetObject(
-                            lid, OpenMode.ForRead);
-                        editor.WriteMessage("\n  " + layer.Name);
-                        count++;
+                        SetHighlight(database, highlighted,
+                            FilterByLayers(database, selectedIds, layerNames));
+                        editor.WriteMessage("\n  已高亮当前已选图层上的图元。");
+                        editor.UpdateScreen();
                     }
-                    lt.Commit();
-                    editor.WriteMessage($"\n  共 {count} 个图层");
                     continue;
                 }
                 else if (entRes.StringResult == "N")
@@ -118,6 +113,10 @@ public sealed class BatchBlockCommands
                                 $"\n  图层已在列表中: {name}");
                         }
                     }
+
+                    SetHighlight(database, highlighted,
+                        FilterByLayers(database, selectedIds, layerNames));
+                    editor.UpdateScreen();
                     continue;
                 }
             }
@@ -144,48 +143,35 @@ public sealed class BatchBlockCommands
                 editor.WriteMessage(
                     $"\n  图层已在列表中: {layerName}");
             }
+
+            SetHighlight(database, highlighted,
+                FilterByLayers(database, selectedIds, layerNames));
+            editor.UpdateScreen();
         }
 
-        // 按图层过滤并高亮
+        // 按图层过滤并高亮（高亮一直保留到设置完成，方便确认范围）
         if (layerNames.Count > 0)
         {
-            var filtered = new List<ObjectId>();
-            using Transaction ft =
-                database.TransactionManager.StartTransaction();
-            foreach (ObjectId id in selectedIds)
-            {
-                Entity ent = (Entity)ft.GetObject(id, OpenMode.ForRead);
-                bool match = false;
-                foreach (string pattern in layerNames)
-                {
-                    if (LayerWildcardMatch(ent.Layer, pattern))
-                    {
-                        match = true;
-                        break;
-                    }
-                }
-                if (match)
-                    filtered.Add(id);
-            }
-            ft.Commit();
+            selectedIds = FilterByLayers(database, selectedIds, layerNames);
             editor.WriteMessage(
-                $"\n已高亮 {filtered.Count} 个该图层的图元");
-            editor.SetImpliedSelection(filtered.ToArray());
-            selectedIds = filtered;
+                $"\n已高亮 {selectedIds.Count} 个已选图层上的图元，确认后继续。");
         }
-        else
-        {
-            editor.SetImpliedSelection(selectedIds.ToArray());
-        }
-
-        // 清除高亮
-        editor.SetImpliedSelection((ObjectId[]?)null);
+        editor.SetImpliedSelection(selectedIds.ToArray());
 
         if (selectedIds.Count == 0)
+        {
+            ClearHighlight(database, editor, highlighted);
             return;
+        }
 
         if (!PromptSettings(editor))
+        {
+            ClearHighlight(database, editor, highlighted);
             return;
+        }
+
+        // 开始建块前清掉高亮
+        ClearHighlight(database, editor, highlighted);
 
         try
         {
@@ -330,6 +316,114 @@ public sealed class BatchBlockCommands
                 .Replace("\\*", ".*").Replace("\\?", ".") + "$";
         return System.Text.RegularExpressions.Regex.IsMatch(
             layerName, regex, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    /// <summary>
+    /// 列出当前图形的所有图层，命中筛选条件的图层标注 [已选]。
+    /// </summary>
+    private static void ListLayers(
+        Editor editor, Database database, List<string> layerNames)
+    {
+        var names = new List<string>();
+        using Transaction lt = database.TransactionManager.StartTransaction();
+        var layerTable = (LayerTable)lt.GetObject(
+            database.LayerTableId, OpenMode.ForRead);
+        foreach (ObjectId lid in layerTable)
+        {
+            var layer = (LayerTableRecord)lt.GetObject(lid, OpenMode.ForRead);
+            names.Add(layer.Name);
+        }
+        lt.Commit();
+
+        names.Sort(StringComparer.OrdinalIgnoreCase);
+
+        int picked = 0;
+        foreach (string name in names)
+        {
+            bool selected = IsLayerSelected(name, layerNames);
+            if (selected)
+                picked++;
+            editor.WriteMessage("\n  " + (selected ? "[已选] " : "       ") + name);
+        }
+
+        editor.WriteMessage(
+            $"\n  共 {names.Count} 个图层，其中已选 {picked} 个。" +
+            (picked > 0 ? "已选图层上的图元已高亮。" : string.Empty));
+    }
+
+    /// <summary>
+    /// 判断图层名是否命中任一已选图层（支持 * ? 通配）。
+    /// </summary>
+    private static bool IsLayerSelected(
+        string layerName, List<string> layerNames)
+    {
+        foreach (string pattern in layerNames)
+        {
+            if (LayerWildcardMatch(layerName, pattern))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 按已选图层过滤图元。
+    /// </summary>
+    private static List<ObjectId> FilterByLayers(
+        Database database, List<ObjectId> ids, List<string> layerNames)
+    {
+        var result = new List<ObjectId>();
+        if (layerNames.Count == 0)
+            return result;
+
+        using Transaction tr = database.TransactionManager.StartTransaction();
+        foreach (ObjectId id in ids)
+        {
+            if (!id.IsValid || id.IsErased)
+                continue;
+            if (tr.GetObject(id, OpenMode.ForRead, false) is not Entity entity)
+                continue;
+            if (IsLayerSelected(entity.Layer, layerNames))
+                result.Add(id);
+        }
+        tr.Commit();
+        return result;
+    }
+
+    /// <summary>
+    /// 把高亮从 previous 切到 next，并同步 previous 的内容。
+    /// </summary>
+    private static void SetHighlight(
+        Database database, List<ObjectId> previous, List<ObjectId> next)
+    {
+        using Transaction tr = database.TransactionManager.StartTransaction();
+        foreach (ObjectId id in previous)
+        {
+            if (!id.IsValid || id.IsErased)
+                continue;
+            if (tr.GetObject(id, OpenMode.ForRead, false) is Entity old)
+                old.Unhighlight();
+        }
+        foreach (ObjectId id in next)
+        {
+            if (!id.IsValid || id.IsErased)
+                continue;
+            if (tr.GetObject(id, OpenMode.ForRead, false) is Entity entity)
+                entity.Highlight();
+        }
+        tr.Commit();
+
+        previous.Clear();
+        previous.AddRange(next);
+    }
+
+    /// <summary>
+    /// 清除实体高亮与夹点预选。
+    /// </summary>
+    private static void ClearHighlight(
+        Database database, Editor editor, List<ObjectId> highlighted)
+    {
+        SetHighlight(database, highlighted, new List<ObjectId>());
+        editor.SetImpliedSelection((ObjectId[]?)null);
     }
 
     private static bool PromptSettings(Editor editor)
