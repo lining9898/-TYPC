@@ -17,6 +17,7 @@ public sealed class BatchBlockCommands
     private static string _blockPrefix = "BLK";
     private static BasePointMode _basePointMode = BasePointMode.LowerLeft;
     private static SourceObjectMode _sourceObjectMode = SourceObjectMode.ConvertToBlock;
+    private static bool _filterExclude = false;
 
     [CommandMethod("BBLK", CommandFlags.Modal | CommandFlags.NoBlockEditor)]
     [CommandMethod("BATCHBLOCK", CommandFlags.Modal | CommandFlags.NoBlockEditor)]
@@ -28,6 +29,7 @@ public sealed class BatchBlockCommands
 
         Editor editor = document.Editor;
         Database database = document.Database;
+        _filterExclude = false;
 
         // ── 1. 框选图元 ──
         var selectedIds = new List<ObjectId>();
@@ -53,17 +55,19 @@ public sealed class BatchBlockCommands
         var highlighted = new List<ObjectId>();
         while (true)
         {
+            string modeText = _filterExclude ? "排除(反选)" : "保留";
             string hint = layerNames.Count == 0
-                ? "（已选 0 个图层，直接回车=不筛选）"
-                : $"（已选 {layerNames.Count} 个图层，回车=结束）";
+                ? $"（模式:{modeText}，已选 0 个图层，直接回车=不筛选）"
+                : $"（模式:{modeText}，已选 {layerNames.Count} 个图层，回车=结束）";
 
             var entOpts = new PromptEntityOptions(
-                $"\n点选参照图元取其图层 [列出图层(L)/输入名称(N)] {hint}: ")
+                $"\n点选参照图元取其图层 [列出(L)/名称(N)/反选(R)] {hint}: ")
             {
                 AllowNone = true
             };
             entOpts.Keywords.Add("L", "L", "列出图层(L)");
             entOpts.Keywords.Add("N", "N", "输入名称(N)");
+            entOpts.Keywords.Add("R", "R", "反选模式(R)");
 
             PromptEntityResult entRes = editor.GetEntity(entOpts);
             if (entRes.Status == PromptStatus.None ||
@@ -119,6 +123,19 @@ public sealed class BatchBlockCommands
                     editor.UpdateScreen();
                     continue;
                 }
+                else if (entRes.StringResult == "R")
+                {
+                    _filterExclude = !_filterExclude;
+                    editor.WriteMessage(
+                        $"\n  图层筛选模式已切换为：{(_filterExclude ? "排除(反选)" : "保留")}");
+                    if (layerNames.Count > 0)
+                    {
+                        SetHighlight(database, highlighted,
+                            FilterByLayers(database, selectedIds, layerNames));
+                        editor.UpdateScreen();
+                    }
+                    continue;
+                }
             }
 
             if (entRes.Status != PromptStatus.OK)
@@ -153,8 +170,9 @@ public sealed class BatchBlockCommands
         if (layerNames.Count > 0)
         {
             selectedIds = FilterByLayers(database, selectedIds, layerNames);
-            editor.WriteMessage(
-                $"\n已高亮 {selectedIds.Count} 个已选图层上的图元，确认后继续。");
+            editor.WriteMessage(_filterExclude
+                ? $"\n已排除 {layerNames.Count} 个图层，保留并高亮 {selectedIds.Count} 个图元，确认后继续。"
+                : $"\n已高亮 {selectedIds.Count} 个已选图层上的图元，确认后继续。");
         }
         editor.SetImpliedSelection(selectedIds.ToArray());
 
@@ -337,18 +355,32 @@ public sealed class BatchBlockCommands
 
         names.Sort(StringComparer.OrdinalIgnoreCase);
 
-        int picked = 0;
+        int inList = 0;
         foreach (string name in names)
         {
             bool selected = IsLayerSelected(name, layerNames);
             if (selected)
-                picked++;
-            editor.WriteMessage("\n  " + (selected ? "[已选] " : "       ") + name);
+                inList++;
+            // 列表中=被点名的图层；排除模式下被点名=将被排除，其余=保留
+            string tag = selected
+                ? (_filterExclude ? "[排除] " : "[已选] ")
+                : (_filterExclude ? "[保留] " : "       ");
+            editor.WriteMessage("\n  " + tag + name);
         }
 
-        editor.WriteMessage(
-            $"\n  共 {names.Count} 个图层，其中已选 {picked} 个。" +
-            (picked > 0 ? "已选图层上的图元已高亮。" : string.Empty));
+        if (_filterExclude)
+        {
+            int kept = names.Count - inList;
+            editor.WriteMessage(
+                $"\n  共 {names.Count} 个图层，排除 {inList} 个，保留 {kept} 个。" +
+                (layerNames.Count > 0 ? "保留图层上的图元已高亮。" : string.Empty));
+        }
+        else
+        {
+            editor.WriteMessage(
+                $"\n  共 {names.Count} 个图层，其中已选 {inList} 个。" +
+                (inList > 0 ? "已选图层上的图元已高亮。" : string.Empty));
+        }
     }
 
     /// <summary>
@@ -382,7 +414,9 @@ public sealed class BatchBlockCommands
                 continue;
             if (tr.GetObject(id, OpenMode.ForRead, false) is not Entity entity)
                 continue;
-            if (IsLayerSelected(entity.Layer, layerNames))
+            bool selected = IsLayerSelected(entity.Layer, layerNames);
+            // 排除(反选)模式下保留"未命中"图层上的图元；高亮始终指向最终将保留的图元
+            if (_filterExclude ? !selected : selected)
                 result.Add(id);
         }
         tr.Commit();
