@@ -43,16 +43,13 @@ if (Test-Path -LiteralPath $resolvedBundleDirectory) {
     Remove-Item -LiteralPath $resolvedBundleDirectory -Recurse -Force
 }
 
-New-Item -ItemType Directory -Force -Path (Join-Path $bundleDirectory "Contents\2021-2024") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $bundleDirectory "Contents\2025-Plus") | Out-Null
 New-Item -ItemType Directory -Force -Path $autocad2016Directory | Out-Null
 Copy-Item (Join-Path $projectDirectory "PackageContents.xml") $bundleDirectory -Force
 
-$net48Output = Join-Path $projectDirectory "bin\$Configuration\net48"
 $net8Output = Join-Path $projectDirectory "bin\$Configuration\net8.0-windows"
 $acad2016Output = Join-Path $projectDirectory "bin\AutoCAD2016"
 
-Copy-Item (Join-Path $net48Output "CadDrawingNumber.dll") (Join-Path $bundleDirectory "Contents\2021-2024") -Force
 Copy-Item (Join-Path $net8Output "CadDrawingNumber.dll") (Join-Path $bundleDirectory "Contents\2025-Plus") -Force
 # 2016 项目设置了 AssemblyName=TYPC，输出文件名为 TYPC.dll。
 Copy-Item (Join-Path $acad2016Output "TYPC.dll") $autocad2016Directory -Force

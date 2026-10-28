@@ -16,8 +16,4 @@
     <PackageReference Include="AutoCAD.NET" Version="20.1.0" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="BeamWidthCheckCommands.cs" />
-  </ItemGroup>
 </Project>
