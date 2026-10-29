@@ -299,6 +299,9 @@ public sealed class BatchBlockCommands
         string blockName = refBlock.Name;
         tr.Commit();
 
+        var ids = new List<ObjectId>();
+
+        // 顶层同名块参照（SelectAll 只扫当前空间，扫不到嵌在块定义内部的）
         TypedValue[] filterValues =
         {
             new((int)DxfCode.Start, "INSERT"),
@@ -308,17 +311,132 @@ public sealed class BatchBlockCommands
         PromptSelectionResult sel = editor.SelectAll(filter);
 
         if (sel.Status == PromptStatus.OK && sel.Value.Count > 0)
+            ids.AddRange(sel.Value.GetObjectIds());
+
+        int topCount = ids.Count;
+
+        // 嵌套在其它块定义内部的同名块：不在模型空间、无法直接选中，
+        // 改为选中承载它们的顶层父块参照，使其可被看见与定位
+        FindNestedBlockHosts(database, blockName,
+            out int nestedCount, out int hostDefCount,
+            out List<ObjectId> hostIds);
+
+        foreach (ObjectId hostId in hostIds)
         {
-            ObjectId[] ids = sel.Value.GetObjectIds();
-            editor.SetImpliedSelection(ids);
-            editor.WriteMessage(
-                "\n已选择 " + ids.Length + " 个同名图块 [" + blockName + "]。");
+            if (!ids.Contains(hostId))
+                ids.Add(hostId);
         }
-        else
+
+        if (ids.Count == 0)
         {
-            editor.WriteMessage(
-                "\n未找到同名图块 [" + blockName + "]。");
+            editor.WriteMessage($"\n未找到同名图块 [{blockName}]。");
+            return;
         }
+
+        editor.SetImpliedSelection(ids.ToArray());
+
+        string message = $"\n已选择 {topCount} 个顶层同名图块 [{blockName}]。";
+        if (nestedCount > 0)
+        {
+            message +=
+                $"\n另有 {nestedCount} 处 [{blockName}] 嵌套在 {hostDefCount} 个父块定义内部" +
+                $"（嵌套块不在模型空间、无法直接选中），" +
+                $"已一并选中承载它们的 {hostIds.Count} 个顶层父块参照以便定位。";
+        }
+        editor.WriteMessage(message);
+    }
+
+    /// <summary>
+    /// 扫描嵌套在其它块定义内部的同名块参照，并找出当前空间中承载它们的顶层父块参照。
+    /// 嵌套块本身不在模型空间，无法直接选中，故返回其宿主以便定位。
+    /// </summary>
+    private static void FindNestedBlockHosts(
+        Database database,
+        string targetName,
+        out int nestedCount,
+        out int hostDefCount,
+        out List<ObjectId> hostIds)
+    {
+        nestedCount = 0;
+        hostDefCount = 0;
+        hostIds = new List<ObjectId>();
+
+        using Transaction tr =
+            database.TransactionManager.StartTransaction();
+        BlockTable blockTable = (BlockTable)tr.GetObject(
+            database.BlockTableId, OpenMode.ForRead, false);
+
+        // 父块定义名 -> 其内部出现的嵌套块名集合
+        var contains = new Dictionary<string, HashSet<string>>(
+            StringComparer.OrdinalIgnoreCase);
+        // 父块定义名 -> 目标块在其内部出现的处数
+        var directHits = new Dictionary<string, int>(
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (ObjectId btrId in blockTable)
+        {
+            BlockTableRecord btr = (BlockTableRecord)tr.GetObject(
+                btrId, OpenMode.ForRead, false);
+            // 跳过模型/图纸空间本身，以及外部参照
+            if (btr.IsLayout || btr.IsFromExternalReference ||
+                btr.IsFromOverlayReference)
+                continue;
+
+            var inner = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (ObjectId entId in btr)
+            {
+                if (tr.GetObject(entId, OpenMode.ForRead, false)
+                    is not BlockReference nested)
+                    continue;
+
+                inner.Add(nested.Name);
+                if (string.Equals(nested.Name, targetName,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    directHits.TryGetValue(btr.Name, out int count);
+                    directHits[btr.Name] = count + 1;
+                    nestedCount++;
+                }
+            }
+
+            if (inner.Count > 0)
+                contains[btr.Name] = inner;
+        }
+
+        if (nestedCount == 0)
+        {
+            tr.Commit();
+            return;
+        }
+
+        hostDefCount = directHits.Count;
+
+        // 向上递归：收集所有（直接或间接）包含目标块的块定义
+        var allHostDefs = new HashSet<string>(
+            directHits.Keys, StringComparer.OrdinalIgnoreCase);
+        var pending = new Queue<string>(directHits.Keys);
+        while (pending.Count > 0)
+        {
+            string current = pending.Dequeue();
+            foreach (KeyValuePair<string, HashSet<string>> pair in contains)
+            {
+                if (pair.Value.Contains(current) && allHostDefs.Add(pair.Key))
+                    pending.Enqueue(pair.Key);
+            }
+        }
+
+        // 当前空间中引用这些宿主定义的顶层块参照
+        BlockTableRecord currentSpace = (BlockTableRecord)tr.GetObject(
+            database.CurrentSpaceId, OpenMode.ForRead, false);
+        foreach (ObjectId entId in currentSpace)
+        {
+            if (tr.GetObject(entId, OpenMode.ForRead, false)
+                is BlockReference top &&
+                allHostDefs.Contains(top.Name))
+                hostIds.Add(entId);
+        }
+
+        tr.Commit();
     }
 
     /// <summary>
