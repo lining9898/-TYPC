@@ -7,6 +7,9 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>TYPC</AssemblyName>
     <RootNamespace>CadDrawingNumber</RootNamespace>
+    <Version>1.8.0</Version>
+    <AssemblyVersion>1.8.0.0</AssemblyVersion>
+    <FileVersion>1.8.0.0</FileVersion>
     <OutputPath>bin\AutoCAD2016\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <NuGetAudit>false</NuGetAudit>
