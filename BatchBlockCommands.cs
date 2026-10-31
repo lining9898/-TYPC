@@ -347,6 +347,192 @@ public sealed class BatchBlockCommands
     }
 
     /// <summary>
+    /// 把选中的图元加入已存在的图块定义。加入的是块定义本身，
+    /// 因此该图块的所有参照都会同步显示新加入的图元。
+    /// </summary>
+    [CommandMethod("ADDBLK", CommandFlags.Modal | CommandFlags.NoBlockEditor)]
+    [CommandMethod("ADDTOBLOCK", CommandFlags.Modal | CommandFlags.NoBlockEditor)]
+    public void AddEntitiesToBlock()
+    {
+        Document? document = AcApplication.DocumentManager.MdiActiveDocument;
+        if (document is null)
+            return;
+
+        Editor editor = document.Editor;
+        Database database = document.Database;
+
+        // ── 1. 选择要加入的图元 ──
+        var selOpts = new PromptSelectionOptions
+        {
+            MessageForAdding = "\n选择要加入图块的图元: "
+        };
+        PromptSelectionResult selection = editor.GetSelection(selOpts);
+        if (selection.Status != PromptStatus.OK ||
+            selection.Value.Count == 0)
+            return;
+
+        var selectedIds = new List<ObjectId>();
+        var existing = new HashSet<ObjectId>();
+        foreach (ObjectId id in selection.Value.GetObjectIds())
+        {
+            if (existing.Add(id))
+                selectedIds.Add(id);
+        }
+
+        // ── 2. 选择目标图块（点选参照 / 按名称） ──
+        var entOpts = new PromptEntityOptions(
+            "\n选择目标图块参照 [输入块名(N)]: ")
+        {
+            AllowNone = true
+        };
+        entOpts.SetRejectMessage("\n请选择图块参照。");
+        entOpts.AddAllowedClass(typeof(BlockReference), true);
+        entOpts.Keywords.Add("N", "N", "输入块名(N)");
+
+        ObjectId targetBtrId = ObjectId.Null;
+        Matrix3d toBlock = Matrix3d.Identity;
+        string blockName = string.Empty;
+
+        PromptEntityResult entRes = editor.GetEntity(entOpts);
+
+        if (entRes.Status == PromptStatus.Keyword &&
+            string.Equals(entRes.StringResult, "N", StringComparison.OrdinalIgnoreCase))
+        {
+            var nameOpts = new PromptStringOptions("\n输入目标图块名: ")
+            {
+                AllowSpaces = false
+            };
+            PromptResult nameResult = editor.GetString(nameOpts);
+            if (nameResult.Status != PromptStatus.OK)
+                return;
+
+            blockName = nameResult.StringResult.Trim();
+            if (blockName.Length == 0)
+                return;
+
+            using Transaction tr = database.TransactionManager.StartTransaction();
+            BlockTable bt = (BlockTable)tr.GetObject(
+                database.BlockTableId, OpenMode.ForRead, false);
+            if (!bt.Has(blockName))
+            {
+                editor.WriteMessage($"\n当前图形中不存在图块 [{blockName}]。");
+                return;
+            }
+            targetBtrId = bt[blockName];
+            BlockTableRecord named = (BlockTableRecord)tr.GetObject(
+                targetBtrId, OpenMode.ForRead, false);
+            // 没有参照作参照时，按块定义自身的插入基准点做平移
+            toBlock = Matrix3d.Displacement(Point3d.Origin - named.Origin);
+            tr.Commit();
+        }
+        else if (entRes.Status == PromptStatus.OK)
+        {
+            using Transaction tr = database.TransactionManager.StartTransaction();
+            BlockReference refBlock = (BlockReference)tr.GetObject(
+                entRes.ObjectId, OpenMode.ForRead, false);
+            blockName = refBlock.Name;
+            targetBtrId = refBlock.DynamicBlockTableRecord != ObjectId.Null
+                ? refBlock.DynamicBlockTableRecord
+                : refBlock.BlockTableRecord;
+            // 模型空间坐标 -> 块定义坐标
+            toBlock = refBlock.BlockTransform.Inverse();
+            tr.Commit();
+        }
+        else
+        {
+            return;
+        }
+
+        // ── 3. 原图元处理 ──
+        var sourceOptions = new PromptKeywordOptions(
+            "\n原图元处理 [删除(D)/保留(K)] <删除>: ")
+        {
+            AllowNone = true,
+            AppendKeywordsToMessage = false
+        };
+        sourceOptions.Keywords.Add("D", "D", "删除(D)");
+        sourceOptions.Keywords.Add("K", "K", "保留(K)");
+        sourceOptions.Keywords.Default = "D";
+        PromptResult sourceResult = editor.GetKeywords(sourceOptions);
+        if (sourceResult.Status == PromptStatus.Cancel)
+            return;
+        bool eraseOriginal = !string.Equals(
+            sourceResult.StringResult, "K", StringComparison.OrdinalIgnoreCase);
+
+        // ── 4. 写入块定义 ──
+        try
+        {
+            using Transaction transaction =
+                database.TransactionManager.StartTransaction();
+
+            BlockTableRecord target = (BlockTableRecord)transaction.GetObject(
+                targetBtrId, OpenMode.ForWrite, false);
+
+            if (target.IsLayout || target.IsFromExternalReference ||
+                target.IsFromOverlayReference)
+            {
+                editor.WriteMessage(
+                    $"\n[{blockName}] 不是可编辑的普通图块（布局或外部参照），无法加入。");
+                return;
+            }
+
+            int added = 0;
+            int skippedSelf = 0;
+            int skippedLocked = 0;
+
+            foreach (ObjectId id in selectedIds)
+            {
+                if (transaction.GetObject(id, OpenMode.ForRead, false)
+                    is not Entity original || original.IsErased)
+                    continue;
+
+                // 跳过目标图块自身的参照：否则等于把参照塞进它自己的定义，会造成循环引用
+                if (original is BlockReference br &&
+                    (br.BlockTableRecord == targetBtrId ||
+                     br.DynamicBlockTableRecord == targetBtrId))
+                {
+                    skippedSelf++;
+                    continue;
+                }
+
+                // 需要删除原图元时，锁定图层上的对象删不掉，跳过
+                if (eraseOriginal && IsEntityOnLockedLayer(original, transaction))
+                {
+                    skippedLocked++;
+                    continue;
+                }
+
+                Entity clone = (Entity)original.Clone();
+                clone.TransformBy(toBlock);
+                target.AppendEntity(clone);
+                transaction.AddNewlyCreatedDBObject(clone, true);
+                added++;
+
+                if (eraseOriginal)
+                {
+                    original.UpgradeOpen();
+                    original.Erase();
+                }
+            }
+
+            transaction.Commit();
+            editor.Regen();
+
+            string message = $"\n已将 {added} 个图元加入图块 [{blockName}]，" +
+                             "该图块的所有参照都会同步显示。";
+            if (skippedSelf > 0)
+                message += $" 跳过 {skippedSelf} 个目标图块自身的参照（避免循环引用）。";
+            if (skippedLocked > 0)
+                message += $" 跳过 {skippedLocked} 个锁定图层上的图元。";
+            editor.WriteMessage(message);
+        }
+        catch (Autodesk.AutoCAD.Runtime.Exception exception)
+        {
+            editor.WriteMessage($"\n加入图块失败：{exception.Message}");
+        }
+    }
+
+    /// <summary>
     /// 扫描嵌套在其它块定义内部的同名块参照，并找出当前空间中承载它们的顶层父块参照。
     /// 嵌套块本身不在模型空间，无法直接选中，故返回其宿主以便定位。
     /// </summary>
@@ -437,6 +623,24 @@ public sealed class BatchBlockCommands
         }
 
         tr.Commit();
+    }
+
+    /// <summary>
+    /// 判断图元是否位于锁定图层上（锁定图层上的对象无法修改或删除）。
+    /// </summary>
+    private static bool IsEntityOnLockedLayer(
+        Entity entity, Transaction transaction)
+    {
+        try
+        {
+            LayerTableRecord layer = (LayerTableRecord)transaction.GetObject(
+                entity.LayerId, OpenMode.ForRead, false);
+            return layer.IsLocked;
+        }
+        catch (Autodesk.AutoCAD.Runtime.Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>
