@@ -61,30 +61,29 @@
 
 ## 编译与安装
 
-需要 .NET 8 SDK。执行：
+本仓库只维护 AutoCAD 2016 专用版，使用官方 `20.1.0` API 与 .NET Framework 4.5 编译，不依赖 IFoxCAD 运行库，也不再打包 `ApplicationPlugins` 安装包。
+
+### 直接安装（无需编译）
+
+在 AutoCAD 2016 中执行 `NETLOAD`，加载：
+
+```text
+dist\AutoCAD2016\TYPC.dll
+```
+
+该 DLL 自包含，不需要任何附加依赖文件。也可执行 `APPLOAD` 把 `dist\AutoCAD2016\TYPC_Load.lsp` 加入启动组，实现开图自动加载。
+
+### 自行编译
+
+需要 .NET 8 SDK（或把 SDK 解压到项目下的 `.dotnet` 目录，`build.ps1` 会优先使用它）。执行：
 
 ```powershell
 .\build.ps1 -Configuration Release
 ```
 
-构建结果位于 `dist\CadDrawingNumber.bundle`。将整个文件夹复制到：
+产物：`dist\AutoCAD2016\TYPC.dll`。
 
-```text
-C:\ProgramData\Autodesk\ApplicationPlugins\CadDrawingNumber.bundle
-```
-
-重启 AutoCAD 后插件会自动加载。也可以在 AutoCAD 中使用 `NETLOAD`，手动加载对应版本目录中的 `CadDrawingNumber.dll`。
-
-- AutoCAD 2021-2024：使用 `Contents\2021-2024`；
-- AutoCAD 2025 及以上：使用 `Contents\2025-Plus`。
-
-### AutoCAD 2016
-
-AutoCAD 2016 专用版使用官方 `20.1.0` API 和 .NET Framework 4.5 编译，不依赖 IFoxCAD 运行库。直接在 AutoCAD 2016 中执行 `NETLOAD`，加载：
-
-```text
-dist\AutoCAD2016\TYPC.dll
-```
+在命令行输入 `TYPCV` 可查看当前版本号。
 
 ## 注意事项
 
