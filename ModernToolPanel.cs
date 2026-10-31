@@ -58,7 +58,7 @@ public sealed class ModernToolPanel : UserControl
 
         AddGroup(content, "02 图块", Accent02,
             Tuple.Create("分堆成块", "BBLK", "按聚簇距离自动分组并批量创建图块"),
-            Tuple.Create("加入图块", "ADDBLK", "把选中图元加入已有图块，该块所有参照同步更新"),
+            Tuple.Create("图元加块", "ADDBLK", "把选中图元加入已有图块，该块所有参照同步更新"),
             Tuple.Create("同名选择", "SELBLK", "点击一个图块，选中所有同名图块并高亮"));
 
         AddGroup(content, "03 线型", Accent03,
