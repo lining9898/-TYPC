@@ -24,6 +24,12 @@ public sealed class ModernToolPanel : UserControl
 
     private const int ButtonHeight = 26;
 
+    /// <summary>
+    /// 面板标题，末尾带插件版本号（取自程序集版本，与 csproj 的 AssemblyVersion 同步）。
+    /// </summary>
+    public static readonly string TitleText =
+        "TYPC 工具箱 v" + CadDrawingNumber.Plugin.VersionString;
+
     private readonly ToolTip _toolTip = new()
     {
         AutoPopDelay = 5000,
@@ -79,7 +85,7 @@ public sealed class ModernToolPanel : UserControl
         };
         footer.Controls.Add(new Label
         {
-            Text = "TYPC 工具箱",
+            Text = TitleText,
             ForeColor = TextDim,
             Font = new Font("Microsoft YaHei UI", 7f),
             AutoSize = true,
@@ -113,7 +119,7 @@ public sealed class ModernToolPanel : UserControl
 
         header.Controls.Add(new Label
         {
-            Text = "TYPC 工具箱",
+            Text = TitleText,
             Font = new Font("Microsoft YaHei UI", 10f, FontStyle.Bold),
             ForeColor = TextMain,
             AutoSize = true,

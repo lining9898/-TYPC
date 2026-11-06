@@ -20,7 +20,7 @@ public sealed class DrawingNumberPaletteCommands
     {
         if (_palette is null)
         {
-            _palette = new PaletteSet("CAD 工具箱", PaletteId)
+            _palette = new PaletteSet(ModernToolPanel.TitleText, PaletteId)
             {
                 Style = PaletteSetStyles.ShowAutoHideButton |
                     PaletteSetStyles.ShowCloseButton |
