@@ -69,90 +69,89 @@ public sealed class DrawingNumberCommands
             return;
         }
 
-        string? attrBlockName = null;
+        List<string>? attrBlockNames = null;
         string attrTag = "图号";
 
-        if (source == DrawingNumberSource.Attribute)
-        {
-            var entOpts = new PromptEntityOptions("\n选择一个图框块: ")
-            {
-                AllowNone = false
-            };
-            entOpts.SetRejectMessage("\n请选择块参照。");
-            entOpts.AddAllowedClass(typeof(BlockReference), true);
-
-            PromptEntityResult entRes = editor.GetEntity(entOpts);
-            if (entRes.Status != PromptStatus.OK)
-                return;
-
-            using (Transaction attrTr =
-                document.Database.TransactionManager.StartTransaction())
-            {
-                BlockReference selBlock = (BlockReference)attrTr.GetObject(
-                    entRes.ObjectId, OpenMode.ForRead);
-                attrBlockName = selBlock.Name;
-                attrTr.Commit();
-            }
-
-            var tagOpts = new PromptStringOptions("\n输入要写入的属性标记 <图号>: ")
-            {
-                AllowSpaces = true
-            };
-            PromptResult tagResult = editor.GetString(tagOpts);
-            if (tagResult.Status != PromptStatus.OK)
-                return;
-            attrTag = string.IsNullOrWhiteSpace(tagResult.StringResult)
-                ? "图号"
-                : tagResult.StringResult.Trim();
-        }
-
-        PromptPointResult firstCorner = editor.GetPoint("\n指定图纸范围的第一个角点: ");
-        if (firstCorner.Status != PromptStatus.OK)
-            return;
-
-        var cornerOptions = new PromptCornerOptions(
-            "\n指定图纸范围的另一个角点: ", firstCorner.Value);
-        PromptPointResult secondCorner = editor.GetCorner(cornerOptions);
-        if (secondCorner.Status != PromptStatus.OK)
-            return;
-
-        var filter = new SelectionFilter(new[]
-        {
-            new TypedValue((int)DxfCode.Start, "TEXT,MTEXT,INSERT")
-        });
-
-        Point3d lowerLeft = new(
-            Math.Min(firstCorner.Value.X, secondCorner.Value.X),
-            Math.Min(firstCorner.Value.Y, secondCorner.Value.Y),
-            Math.Min(firstCorner.Value.Z, secondCorner.Value.Z));
-        Point3d upperRight = new(
-            Math.Max(firstCorner.Value.X, secondCorner.Value.X),
-            Math.Max(firstCorner.Value.Y, secondCorner.Value.Y),
-            Math.Max(firstCorner.Value.Z, secondCorner.Value.Z));
-
-        PromptSelectionResult selection = editor.SelectCrossingWindow(
-            lowerLeft, upperRight, filter);
-
-        if (selection.Status != PromptStatus.OK || selection.Value.Count == 0)
-        {
-            editor.WriteMessage("\n框选范围内没有可处理的文字或块属性。");
-            return;
-        }
-
-        // 框选完成后立即高亮所选对象，方便确认范围；
-        // 之后无论完成编号还是中途取消，都会清除高亮。
-        editor.SetImpliedSelection(selection.Value.GetObjectIds());
-        editor.WriteMessage(
-            $"\n框选范围内共 {selection.Value.Count} 个对象，已高亮，请确认范围。");
+        // 图框属性模式下点选图框块时会高亮全部同名图框块；
+        // finally 确保后续任一步取消都不留高亮残影。
+        var attributeHighlightIds = new List<ObjectId>();
         try
         {
-            RunNumbering(
-                document, source, attrBlockName, attrTag,
-                selection.Value.GetObjectIds());
+            if (source == DrawingNumberSource.Attribute)
+            {
+                if (!TryPickTitleBlocks(
+                    document, out List<string> names, out attributeHighlightIds))
+                {
+                    return;
+                }
+
+                attrBlockNames = names;
+
+                var tagOpts = new PromptStringOptions("\n输入要写入的属性标记 <图号>: ")
+                {
+                    AllowSpaces = true
+                };
+                PromptResult tagResult = editor.GetString(tagOpts);
+                if (tagResult.Status != PromptStatus.OK)
+                    return;
+                attrTag = string.IsNullOrWhiteSpace(tagResult.StringResult)
+                    ? "图号"
+                    : tagResult.StringResult.Trim();
+            }
+
+            PromptPointResult firstCorner = editor.GetPoint("\n指定图纸范围的第一个角点: ");
+            if (firstCorner.Status != PromptStatus.OK)
+                return;
+
+            var cornerOptions = new PromptCornerOptions(
+                "\n指定图纸范围的另一个角点: ", firstCorner.Value);
+            PromptPointResult secondCorner = editor.GetCorner(cornerOptions);
+            if (secondCorner.Status != PromptStatus.OK)
+                return;
+
+            var filter = new SelectionFilter(new[]
+            {
+                new TypedValue((int)DxfCode.Start, "TEXT,MTEXT,INSERT")
+            });
+
+            Point3d lowerLeft = new(
+                Math.Min(firstCorner.Value.X, secondCorner.Value.X),
+                Math.Min(firstCorner.Value.Y, secondCorner.Value.Y),
+                Math.Min(firstCorner.Value.Z, secondCorner.Value.Z));
+            Point3d upperRight = new(
+                Math.Max(firstCorner.Value.X, secondCorner.Value.X),
+                Math.Max(firstCorner.Value.Y, secondCorner.Value.Y),
+                Math.Max(firstCorner.Value.Z, secondCorner.Value.Z));
+
+            PromptSelectionResult selection = editor.SelectCrossingWindow(
+                lowerLeft, upperRight, filter);
+
+            if (selection.Status != PromptStatus.OK || selection.Value.Count == 0)
+            {
+                editor.WriteMessage("\n框选范围内没有可处理的文字或块属性。");
+                return;
+            }
+
+            // 框选完成后立即高亮所选对象，方便确认范围；
+            // 之后无论完成编号还是中途取消，都会清除高亮。
+            editor.SetImpliedSelection(selection.Value.GetObjectIds());
+            editor.WriteMessage(
+                $"\n框选范围内共 {selection.Value.Count} 个对象，已高亮，请确认范围。");
+            try
+            {
+                RunNumbering(
+                    document, source, attrBlockNames, attrTag,
+                    selection.Value.GetObjectIds());
+            }
+            finally
+            {
+                editor.SetImpliedSelection((ObjectId[]?)null);
+            }
         }
         finally
         {
-            editor.SetImpliedSelection((ObjectId[]?)null);
+            if (attributeHighlightIds.Count > 0)
+                editor.SetImpliedSelection((ObjectId[]?)null);
         }
     }
 
@@ -163,7 +162,7 @@ public sealed class DrawingNumberCommands
     private static void RunNumbering(
         Document document,
         DrawingNumberSource source,
-        string? attrBlockName,
+        List<string>? attrBlockNames,
         string attrTag,
         ObjectId[] selectedIds)
     {
@@ -205,7 +204,9 @@ public sealed class DrawingNumberCommands
                 {
                     BlockReference? block = transaction.GetObject(
                         id, OpenMode.ForRead, false) as BlockReference;
-                    if (block is null || block.Name != attrBlockName)
+                    if (block is null || attrBlockNames is null ||
+                        !attrBlockNames.Contains(
+                            block.Name, StringComparer.OrdinalIgnoreCase))
                         continue;
 
                     foreach (ObjectId attrId in block.AttributeCollection)
@@ -272,7 +273,7 @@ public sealed class DrawingNumberCommands
                 DrawingNumberSource.Placeholder =>
                     $"\n框选范围内未找到占位符\u201C{_placeholder}\u201D。",
                 DrawingNumberSource.Attribute =>
-                    $"\n框选范围内未找到块[{attrBlockName}]的属性[{attrTag}]。",
+                    $"\n框选范围内未找到块[{string.Join("、", attrBlockNames ?? new List<string>())}]的属性[{attrTag}]。",
                 _ => "\n未找到可处理的对象。"
             };
             editor.WriteMessage(message);
@@ -562,6 +563,116 @@ public sealed class DrawingNumberCommands
         }
 
         tr.Commit();
+    }
+
+    /// <summary>
+    /// 图框属性模式：循环点选多个图框块，回车结束。
+    /// 每加入一个块名，立即找出图中所有同名图框块并高亮，方便确认。
+    /// 返回 false 表示取消或一个块都没选到。
+    /// </summary>
+    private static bool TryPickTitleBlocks(
+        Document document,
+        out List<string> blockNames,
+        out List<ObjectId> matchedIds)
+    {
+        Editor editor = document.Editor;
+        Database database = document.Database;
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ids = new List<ObjectId>();
+
+        while (true)
+        {
+            string hint = names.Count == 0
+                ? "（至少选 1 个，回车=取消）"
+                : $"（已选 {names.Count} 个块名，回车=结束选择）";
+
+            var entOpts = new PromptEntityOptions(
+                $"\n点选图框块 [结束(Enter)] {hint}: ")
+            {
+                AllowNone = true
+            };
+            entOpts.SetRejectMessage("\n请选择块参照。");
+            entOpts.AddAllowedClass(typeof(BlockReference), true);
+
+            PromptEntityResult entRes = editor.GetEntity(entOpts);
+            if (entRes.Status == PromptStatus.Cancel)
+            {
+                blockNames = new List<string>();
+                matchedIds = ids;
+                return false;
+            }
+
+            if (entRes.Status == PromptStatus.None)
+                break;
+
+            if (entRes.Status != PromptStatus.OK)
+                continue;
+
+            string name;
+            using (Transaction tr =
+                database.TransactionManager.StartTransaction())
+            {
+                BlockReference block = (BlockReference)tr.GetObject(
+                    entRes.ObjectId, OpenMode.ForRead);
+                name = block.Name;
+                tr.Commit();
+            }
+
+            if (names.Add(name))
+            {
+                ids = FindBlocksByNames(editor, names);
+                editor.SetImpliedSelection(ids.ToArray());
+                editor.WriteMessage(
+                    $"\n已加入块名 [{name}]，共 {names.Count} 个块名；" +
+                    $"图中 {ids.Count} 个同名图框块已高亮。");
+            }
+            else
+            {
+                editor.WriteMessage($"\n块名 [{name}] 已在列表中。");
+            }
+        }
+
+        if (names.Count == 0)
+        {
+            editor.WriteMessage("\n未选择任何图框块。");
+            blockNames = new List<string>();
+            matchedIds = new List<ObjectId>();
+            return false;
+        }
+
+        blockNames = new List<string>(names);
+        matchedIds = ids;
+        return true;
+    }
+
+    /// <summary>
+    /// 在当前空间中查找所有块名命中给定集合的块参照（去重）。
+    /// </summary>
+    private static List<ObjectId> FindBlocksByNames(
+        Editor editor, IEnumerable<string> blockNames)
+    {
+        var ids = new List<ObjectId>();
+        var seen = new HashSet<ObjectId>();
+
+        foreach (string name in blockNames)
+        {
+            var filter = new SelectionFilter(new TypedValue[]
+            {
+                new((int)DxfCode.Start, "INSERT"),
+                new((int)DxfCode.BlockName, name)
+            });
+            PromptSelectionResult sel = editor.SelectAll(filter);
+            if (sel.Status != PromptStatus.OK)
+                continue;
+
+            foreach (ObjectId id in sel.Value.GetObjectIds())
+            {
+                if (seen.Add(id))
+                    ids.Add(id);
+            }
+        }
+
+        return ids;
     }
 
     private static bool TrySelectDrawingNumberLayer(Document document)
