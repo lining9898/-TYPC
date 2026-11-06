@@ -65,13 +65,13 @@
 
 ### 直接安装（无需编译）
 
-在 AutoCAD 2016 中执行 `NETLOAD`，加载：
+在 AutoCAD 2016 中执行 `NETLOAD`，加载（文件名带版本号，以实际文件为准）：
 
 ```text
-dist\AutoCAD2016\TYPC.dll
+dist\AutoCAD2016\TYPC_v1.9.3.dll
 ```
 
-该 DLL 自包含，不需要任何附加依赖文件。也可执行 `APPLOAD` 把 `dist\AutoCAD2016\TYPC_Load.lsp` 加入启动组，实现开图自动加载。
+该 DLL 自包含，不需要任何附加依赖文件。也可执行 `APPLOAD` 把 `dist\AutoCAD2016\TYPC_Load.lsp` 加入启动组，实现开图自动加载——该脚本会自动加载同目录下最新的 `TYPC_v*.dll`，升级后无需修改。
 
 ### 自行编译
 
@@ -81,7 +81,7 @@ dist\AutoCAD2016\TYPC.dll
 .\build.ps1 -Configuration Release
 ```
 
-产物：`dist\AutoCAD2016\TYPC.dll`。
+产物按版本号命名：`dist\AutoCAD2016\TYPC_v<版本号>.dll`（版本号取自 csproj 的 `AssemblyVersion`）。
 
 在命令行输入 `TYPCV` 可查看当前版本号。
 

@@ -27,8 +27,17 @@ if ($LASTEXITCODE -ne 0) {
 New-Item -ItemType Directory -Force -Path $autocad2016Directory | Out-Null
 
 $acad2016Output = Join-Path $projectDirectory "bin\AutoCAD2016"
+$builtDll = Join-Path $acad2016Output "TYPC.dll"
 
-# 2016 项目设置了 AssemblyName=TYPC，输出文件名为 TYPC.dll。
-Copy-Item (Join-Path $acad2016Output "TYPC.dll") $autocad2016Directory -Force
+# 从编译产物读取程序集版本，打包为带版本号的文件名（TYPC_vX.Y.Z.dll），
+# 避免与旧版本混淆。TYPC_Load.lsp 会自动探测目录里最新的 TYPC_v*.dll。
+$version = [System.Reflection.AssemblyName]::GetAssemblyName($builtDll).Version
+$versionTag = "$($version.Major).$($version.Minor).$($version.Build)"
 
-Write-Host "构建完成。AutoCAD 2016 DLL: $autocad2016Directory\TYPC.dll"
+Get-ChildItem -LiteralPath $autocad2016Directory -Filter "TYPC*.dll" -File |
+    Remove-Item -Force
+
+$targetDll = Join-Path $autocad2016Directory "TYPC_v$versionTag.dll"
+Copy-Item $builtDll $targetDll -Force
+
+Write-Host "构建完成。AutoCAD 2016 DLL: $targetDll"
