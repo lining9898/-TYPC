@@ -139,6 +139,36 @@ public sealed class DrawingNumberCommands
             return;
         }
 
+        // 框选完成后立即高亮所选对象，方便确认范围；
+        // 之后无论完成编号还是中途取消，都会清除高亮。
+        editor.SetImpliedSelection(selection.Value.GetObjectIds());
+        editor.WriteMessage(
+            $"\n框选范围内共 {selection.Value.Count} 个对象，已高亮，请确认范围。");
+        try
+        {
+            RunNumbering(
+                document, source, attrBlockName, attrTag,
+                selection.Value.GetObjectIds());
+        }
+        finally
+        {
+            editor.SetImpliedSelection((ObjectId[]?)null);
+        }
+    }
+
+    /// <summary>
+    /// 图号编号的后续流程：输入起始图号、收集目标、选方向、写入并提交。
+    /// 由 SetDrawingNumber 在框选高亮之后调用。
+    /// </summary>
+    private static void RunNumbering(
+        Document document,
+        DrawingNumberSource source,
+        string? attrBlockName,
+        string attrTag,
+        ObjectId[] selectedIds)
+    {
+        Editor editor = document.Editor;
+
         var numberOptions = new PromptStringOptions("\n输入起始图号（例如 DB-1）: ")
         {
             AllowSpaces = true
@@ -162,14 +192,14 @@ public sealed class DrawingNumberCommands
         {
             frames = CollectLayerTargets(
                 NumberingAttributeSupport.ExpandSelection(
-                    selection.Value.GetObjectIds(), transaction),
+                    selectedIds, transaction),
                 _drawingNumberLayer!,
                 transaction,
                 ref skipped);
         }
         else if (source == DrawingNumberSource.Attribute)
         {
-            foreach (ObjectId id in selection.Value.GetObjectIds())
+            foreach (ObjectId id in selectedIds)
             {
                 try
                 {
@@ -206,7 +236,7 @@ public sealed class DrawingNumberCommands
         else
         {
             foreach (ObjectId id in NumberingAttributeSupport.ExpandSelection(
-                         selection.Value.GetObjectIds(), transaction))
+                         selectedIds, transaction))
             {
                 try
                 {
