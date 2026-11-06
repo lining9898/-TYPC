@@ -1,6 +1,6 @@
 ;;; ============================================================
 ;;; TYPC Toolbox - AutoCAD 2016 loader
-;;; DLL  : TYPC.dll (v1.9.0, acdbmgd/acmgd 20.1 = AutoCAD 2016)
+;;; DLL  : TYPC.dll (v1.9.1, acdbmgd/acmgd 20.1 = AutoCAD 2016)
 ;;; Note : self-contained - no extra DLL has to sit next to it.
 ;;;
 ;;; HOW TO USE
