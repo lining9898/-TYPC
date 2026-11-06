@@ -99,7 +99,10 @@ public sealed class DrawingNumberCommands
                     : tagResult.StringResult.Trim();
             }
 
-            PromptPointResult firstCorner = editor.GetPoint("\n指定图纸范围的第一个角点: ");
+            string firstCornerPrompt = source == DrawingNumberSource.Attribute
+                ? "\n指定图纸范围的第一个角点（只处理已点选的图框块）: "
+                : "\n指定图纸范围的第一个角点: ";
+            PromptPointResult firstCorner = editor.GetPoint(firstCornerPrompt);
             if (firstCorner.Status != PromptStatus.OK)
                 return;
 
@@ -109,10 +112,14 @@ public sealed class DrawingNumberCommands
             if (secondCorner.Status != PromptStatus.OK)
                 return;
 
-            var filter = new SelectionFilter(new[]
-            {
-                new TypedValue((int)DxfCode.Start, "TEXT,MTEXT,INSERT")
-            });
+            // 图框属性模式：已经点选过图框块，框选时只挑这些块名，
+            // 不再把范围内的普通文字、其他块参照也一起框进来。
+            SelectionFilter filter = source == DrawingNumberSource.Attribute
+                ? BuildTitleBlockFilter(attrBlockNames!)
+                : new SelectionFilter(new[]
+                {
+                    new TypedValue((int)DxfCode.Start, "TEXT,MTEXT,INSERT")
+                });
 
             Point3d lowerLeft = new(
                 Math.Min(firstCorner.Value.X, secondCorner.Value.X),
@@ -128,7 +135,9 @@ public sealed class DrawingNumberCommands
 
             if (selection.Status != PromptStatus.OK || selection.Value.Count == 0)
             {
-                editor.WriteMessage("\n框选范围内没有可处理的文字或块属性。");
+                editor.WriteMessage(source == DrawingNumberSource.Attribute
+                    ? "\n框选范围内没有已点选的图框块。"
+                    : "\n框选范围内没有可处理的文字或块属性。");
                 return;
             }
 
@@ -137,9 +146,17 @@ public sealed class DrawingNumberCommands
             // 用 Entity.Highlight 而非 SetImpliedSelection，
             // 否则后续提示会把高亮清掉，且 GRIPS=0 时不可见。
             ObjectId[] crossingIds = selection.Value.GetObjectIds();
+            if (source == DrawingNumberSource.Attribute)
+            {
+                // 取消点选阶段「全图同名块」的预览高亮，
+                // 只保留框选范围内真正要编号的图框块。
+                SetEntitiesHighlighted(editor, attributeHighlightIds, false);
+                attributeHighlightIds.Clear();
+            }
             SetEntitiesHighlighted(editor, crossingIds, true);
-            editor.WriteMessage(
-                $"\n框选范围内共 {crossingIds.Length} 个对象，已高亮，请确认范围。");
+            editor.WriteMessage(source == DrawingNumberSource.Attribute
+                ? $"\n框选范围内命中 {crossingIds.Length} 个图框块，已高亮，请确认范围。"
+                : $"\n框选范围内共 {crossingIds.Length} 个对象，已高亮，请确认范围。");
             try
             {
                 RunNumbering(
@@ -682,6 +699,34 @@ public sealed class DrawingNumberCommands
         }
 
         return ids;
+    }
+
+    /// <summary>
+    /// 图框属性模式专用过滤器：只选 INSERT，且块名必须命中已点选的图框块名。
+    /// 顶层条件为 AND，块名之间用 -4 逻辑组做 OR。
+    /// </summary>
+    private static SelectionFilter BuildTitleBlockFilter(IEnumerable<string> blockNames)
+    {
+        var values = new List<TypedValue>
+        {
+            new TypedValue((int)DxfCode.Start, "INSERT")
+        };
+
+        List<string> names = blockNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (names.Count > 1)
+            values.Add(new TypedValue((int)DxfCode.Operator, "<OR"));
+
+        foreach (string name in names)
+            values.Add(new TypedValue((int)DxfCode.BlockName, name));
+
+        if (names.Count > 1)
+            values.Add(new TypedValue((int)DxfCode.Operator, "OR>"));
+
+        return new SelectionFilter(values.ToArray());
     }
 
     /// <summary>
