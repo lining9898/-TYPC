@@ -134,24 +134,27 @@ public sealed class DrawingNumberCommands
 
             // 框选完成后立即高亮所选对象，方便确认范围；
             // 之后无论完成编号还是中途取消，都会清除高亮。
-            editor.SetImpliedSelection(selection.Value.GetObjectIds());
+            // 用 Entity.Highlight 而非 SetImpliedSelection，
+            // 否则后续提示会把高亮清掉，且 GRIPS=0 时不可见。
+            ObjectId[] crossingIds = selection.Value.GetObjectIds();
+            SetEntitiesHighlighted(editor, crossingIds, true);
             editor.WriteMessage(
-                $"\n框选范围内共 {selection.Value.Count} 个对象，已高亮，请确认范围。");
+                $"\n框选范围内共 {crossingIds.Length} 个对象，已高亮，请确认范围。");
             try
             {
                 RunNumbering(
                     document, source, attrBlockNames, attrTag,
-                    selection.Value.GetObjectIds());
+                    crossingIds);
             }
             finally
             {
-                editor.SetImpliedSelection((ObjectId[]?)null);
+                SetEntitiesHighlighted(editor, crossingIds, false);
             }
         }
         finally
         {
             if (attributeHighlightIds.Count > 0)
-                editor.SetImpliedSelection((ObjectId[]?)null);
+                SetEntitiesHighlighted(editor, attributeHighlightIds, false);
         }
     }
 
@@ -579,6 +582,7 @@ public sealed class DrawingNumberCommands
         Database database = document.Database;
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var ids = new List<ObjectId>();
+        var highlightedIds = new List<ObjectId>();
 
         while (true)
         {
@@ -597,8 +601,9 @@ public sealed class DrawingNumberCommands
             PromptEntityResult entRes = editor.GetEntity(entOpts);
             if (entRes.Status == PromptStatus.Cancel)
             {
+                SetEntitiesHighlighted(editor, highlightedIds, false);
                 blockNames = new List<string>();
-                matchedIds = ids;
+                matchedIds = new List<ObjectId>();
                 return false;
             }
 
@@ -620,8 +625,12 @@ public sealed class DrawingNumberCommands
 
             if (names.Add(name))
             {
+                // 不能用 SetImpliedSelection：下一轮 GetEntity 提示会把它清掉，
+                // 且 GRIPS=0 时没有可视效果。改用 Entity.Highlight 持久高亮。
+                SetEntitiesHighlighted(editor, highlightedIds, false);
                 ids = FindBlocksByNames(editor, names);
-                editor.SetImpliedSelection(ids.ToArray());
+                SetEntitiesHighlighted(editor, ids, true);
+                highlightedIds = ids;
                 editor.WriteMessage(
                     $"\n已加入块名 [{name}]，共 {names.Count} 个块名；" +
                     $"图中 {ids.Count} 个同名图框块已高亮。");
@@ -673,6 +682,39 @@ public sealed class DrawingNumberCommands
         }
 
         return ids;
+    }
+
+    /// <summary>
+    /// 用 Entity.Highlight/Unhighlight 持久高亮（或取消高亮）一批图元。
+    /// 与 SetImpliedSelection 不同，该高亮不会被后续命令行提示清除，
+    /// 也不受 GRIPS 系统变量影响。已删除或锁定图层上的对象会被跳过。
+    /// </summary>
+    private static void SetEntitiesHighlighted(
+        Editor editor, IEnumerable<ObjectId> ids, bool highlight)
+    {
+        Database database = editor.Document.Database;
+        using Transaction tr = database.TransactionManager.StartTransaction();
+        foreach (ObjectId id in ids)
+        {
+            if (id.IsNull || id.IsErased)
+                continue;
+            try
+            {
+                if (tr.GetObject(id, OpenMode.ForWrite) is Entity entity)
+                {
+                    if (highlight)
+                        entity.Highlight();
+                    else
+                        entity.Unhighlight();
+                }
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception)
+            {
+                // 锁定图层等情况下跳过该对象，不影响其余对象。
+            }
+        }
+        tr.Commit();
+        editor.UpdateScreen();
     }
 
     private static bool TrySelectDrawingNumberLayer(Document document)
